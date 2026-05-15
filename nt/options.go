@@ -13,6 +13,7 @@ type ErrorHandler func(lineNum int, line string, err error) (fixedLine string, r
 type config struct {
 	base         string
 	errorHandler ErrorHandler
+	maxLineLen   int
 }
 
 // WithBase sets the base IRI for resolving relative IRIs.
@@ -24,4 +25,12 @@ func WithBase(base string) Option {
 // See ErrorHandler for semantics.
 func WithErrorHandler(h ErrorHandler) Option {
 	return func(c *config) { c.errorHandler = h }
+}
+
+// WithMaxLineLength raises the maximum byte length of a single N-Triples line.
+// The default (bufio.MaxScanTokenSize, 64KB) is too small for inputs that pack
+// large literals — e.g. WKT polygons — onto one line. Pass a value larger than
+// the longest expected line in bytes.
+func WithMaxLineLength(n int) Option {
+	return func(c *config) { c.maxLineLen = n }
 }

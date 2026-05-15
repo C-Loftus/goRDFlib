@@ -17,6 +17,9 @@ func Parse(g *rdflibgo.Graph, r io.Reader, opts ...Option) error {
 		o(&cfg)
 	}
 	scanner := bufio.NewScanner(r)
+	if cfg.maxLineLen > 0 {
+		scanner.Buffer(make([]byte, 0, 64*1024), cfg.maxLineLen)
+	}
 	lineNum := 0
 	for scanner.Scan() {
 		lineNum++

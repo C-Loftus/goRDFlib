@@ -464,3 +464,34 @@ func TestNTParserErrorHandlerReceivesLineText(t *testing.T) {
 		t.Errorf("handler received wrong line text: %q", receivedLine)
 	}
 }
+
+// TestNTParserLongLineDefaultErrors verifies that a line larger than bufio.Scanner's
+// default 64KB max token size produces a scanner error under default settings.
+func TestNTParserLongLineDefaultErrors(t *testing.T) {
+	bigLiteral := strings.Repeat("x", 100*1024)
+	line := `<http://example.org/s> <http://example.org/p> "` + bigLiteral + `" .` + "\n"
+
+	g := rdflibgo.NewGraph()
+	err := Parse(g, strings.NewReader(line))
+	if err == nil {
+		t.Fatal("expected error parsing line > 64KB with default buffer, got nil")
+	}
+	if !strings.Contains(err.Error(), "token too long") {
+		t.Fatalf("expected bufio token too long error, got: %v", err)
+	}
+}
+
+// TestNTParserWithMaxLineLength verifies that WithMaxLineLength raises the scanner
+// buffer so long literals parse successfully.
+func TestNTParserWithMaxLineLength(t *testing.T) {
+	bigLiteral := strings.Repeat("x", 100*1024)
+	line := `<http://example.org/s> <http://example.org/p> "` + bigLiteral + `" .` + "\n"
+
+	g := rdflibgo.NewGraph()
+	if err := Parse(g, strings.NewReader(line), WithMaxLineLength(1<<20)); err != nil {
+		t.Fatalf("unexpected error with WithMaxLineLength(1MB): %v", err)
+	}
+	if g.Len() != 1 {
+		t.Fatalf("expected 1 triple, got %d", g.Len())
+	}
+}

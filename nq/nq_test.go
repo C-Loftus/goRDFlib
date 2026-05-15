@@ -316,3 +316,34 @@ func TestNQParserErrorHandlerWithQuadHandler(t *testing.T) {
 		t.Errorf("expected 1 graph callback, got %v", graphs)
 	}
 }
+
+// TestNQParserLongLineDefaultErrors verifies that a line larger than bufio.Scanner's
+// default 64KB max token size produces a scanner error under default settings.
+func TestNQParserLongLineDefaultErrors(t *testing.T) {
+	bigLiteral := strings.Repeat("x", 100*1024)
+	line := `<http://example.org/s> <http://example.org/p> "` + bigLiteral + `" <http://example.org/g> .` + "\n"
+
+	g := rdflibgo.NewGraph()
+	err := Parse(g, strings.NewReader(line))
+	if err == nil {
+		t.Fatal("expected error parsing line > 64KB with default buffer, got nil")
+	}
+	if !strings.Contains(err.Error(), "token too long") {
+		t.Fatalf("expected bufio token too long error, got: %v", err)
+	}
+}
+
+// TestNQParserWithMaxLineLength verifies that WithMaxLineLength raises the scanner
+// buffer so long literals (e.g. WKT polygons) parse successfully.
+func TestNQParserWithMaxLineLength(t *testing.T) {
+	bigLiteral := strings.Repeat("x", 100*1024)
+	line := `<http://example.org/s> <http://example.org/p> "` + bigLiteral + `" <http://example.org/g> .` + "\n"
+
+	g := rdflibgo.NewGraph()
+	if err := Parse(g, strings.NewReader(line), WithMaxLineLength(1<<20)); err != nil {
+		t.Fatalf("unexpected error with WithMaxLineLength(1MB): %v", err)
+	}
+	if g.Len() != 1 {
+		t.Fatalf("expected 1 triple, got %d", g.Len())
+	}
+}
