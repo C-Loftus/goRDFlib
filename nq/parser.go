@@ -14,10 +14,38 @@ import (
 // without an explicit graph context.
 type QuadHandler func(s rdflibgo.Subject, p rdflibgo.URIRef, o rdflibgo.Term, graph rdflibgo.Term)
 
+// StreamHandler is the callback used by ParseStream. Returning a non-nil error
+// aborts the parse and is propagated to the caller of ParseStream. The graph
+// term is nil for triples without an explicit graph context.
+type StreamHandler func(s rdflibgo.Subject, p rdflibgo.URIRef, o rdflibgo.Term, graph rdflibgo.Term) error
+
 // Parse parses N-Quads format RDF into the given graph.
 // Graph context is preserved and passed to the optional QuadHandler if configured via WithQuadHandler.
 // When no QuadHandler is set, all triples are added to the given graph regardless of graph context.
 func Parse(g *rdflibgo.Graph, r io.Reader, opts ...Option) error {
+	quadHandler := func(s rdflibgo.Subject, p rdflibgo.URIRef, o rdflibgo.Term, graph rdflibgo.Term) error {
+		g.Add(s, p, o)
+		return nil
+	}
+	return parseLines(r, opts, quadHandler, true)
+}
+
+// ParseStream parses N-Quads format RDF and dispatches each parsed quad to the
+// handler without populating any graph. Use this for streaming large inputs
+// (e.g. converting an N-Quads dump to another format on the fly) where holding
+// the full graph in memory is not feasible. Returning an error from the handler
+// aborts the parse.
+func ParseStream(r io.Reader, h StreamHandler, opts ...Option) error {
+	if h == nil {
+		return fmt.Errorf("nq.ParseStream: handler must not be nil")
+	}
+	return parseLines(r, opts, h, false)
+}
+
+// parseLines is the shared scanner loop used by Parse and ParseStream.
+// dispatchQuadHandler controls whether cfg.quadHandler (set via WithQuadHandler)
+// is also invoked: Parse honors it for back-compat, ParseStream uses only `h`.
+func parseLines(r io.Reader, opts []Option, h StreamHandler, dispatchQuadHandler bool) error {
 	var cfg config
 	for _, o := range opts {
 		o(&cfg)
@@ -33,13 +61,13 @@ func Parse(g *rdflibgo.Graph, r io.Reader, opts ...Option) error {
 		if line == "" || line[0] == '#' {
 			continue
 		}
-		if err := parseNQLine(g, line, lineNum, cfg.quadHandler); err != nil {
+		if err := parseNQLine(line, lineNum, h, cfg.quadHandler, dispatchQuadHandler); err != nil {
 			if cfg.errorHandler == nil {
 				return err
 			}
 			fixedLine, retry := cfg.errorHandler(lineNum, line, err)
 			if retry {
-				if err2 := parseNQLine(g, fixedLine, lineNum, cfg.quadHandler); err2 != nil {
+				if err2 := parseNQLine(fixedLine, lineNum, h, cfg.quadHandler, dispatchQuadHandler); err2 != nil {
 					return fmt.Errorf("line %d: retry failed: %w", lineNum, err2)
 				}
 			}
@@ -48,7 +76,7 @@ func Parse(g *rdflibgo.Graph, r io.Reader, opts ...Option) error {
 	return scanner.Err()
 }
 
-func parseNQLine(g *rdflibgo.Graph, line string, lineNum int, handler QuadHandler) error {
+func parseNQLine(line string, lineNum int, h StreamHandler, qh QuadHandler, dispatchQuadHandler bool) error {
 	p := &ntsyntax.LineParser{Line: line, Pos: 0, LineNum: lineNum}
 
 	subj, err := p.ReadSubject()
@@ -80,10 +108,8 @@ func parseNQLine(g *rdflibgo.Graph, line string, lineNum int, handler QuadHandle
 		return fmt.Errorf("line %d: expected '.'", lineNum)
 	}
 
-	if handler != nil {
-		handler(subj, pred, obj, graphCtx)
+	if dispatchQuadHandler && qh != nil {
+		qh(subj, pred, obj, graphCtx)
 	}
-
-	g.Add(subj, pred, obj)
-	return nil
+	return h(subj, pred, obj, graphCtx)
 }

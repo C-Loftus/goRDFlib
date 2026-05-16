@@ -2,6 +2,8 @@ package nq
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -345,5 +347,151 @@ func TestNQParserWithMaxLineLength(t *testing.T) {
 	}
 	if g.Len() != 1 {
 		t.Fatalf("expected 1 triple, got %d", g.Len())
+	}
+}
+
+// TestNQParseStreamBasic verifies that ParseStream dispatches every quad to the
+// handler with the correct subject, predicate, object, and graph terms — and
+// does not require (nor populate) a graph.
+func TestNQParseStreamBasic(t *testing.T) {
+	input := `<http://example.org/s1> <http://example.org/p> "a" <http://example.org/g> .
+<http://example.org/s2> <http://example.org/p> "b" .
+`
+	type row struct {
+		s, p, o, g string
+	}
+	var got []row
+	err := ParseStream(strings.NewReader(input), func(s rdflibgo.Subject, p rdflibgo.URIRef, o rdflibgo.Term, graph rdflibgo.Term) error {
+		r := row{s: s.N3(), p: p.N3(), o: o.N3()}
+		if graph != nil {
+			r.g = graph.N3()
+		}
+		got = append(got, r)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []row{
+		{s: "<http://example.org/s1>", p: "<http://example.org/p>", o: `"a"`, g: "<http://example.org/g>"},
+		{s: "<http://example.org/s2>", p: "<http://example.org/p>", o: `"b"`, g: ""},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d quads, got %d (%v)", len(want), len(got), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("quad %d: want %+v, got %+v", i, want[i], got[i])
+		}
+	}
+}
+
+// TestNQParseStreamHandlerError verifies that an error returned from the handler
+// aborts parsing and propagates back to the caller.
+func TestNQParseStreamHandlerError(t *testing.T) {
+	input := `<http://example.org/s1> <http://example.org/p> "a" .
+<http://example.org/s2> <http://example.org/p> "b" .
+<http://example.org/s3> <http://example.org/p> "c" .
+`
+	sentinel := fmt.Errorf("sentinel")
+	count := 0
+	err := ParseStream(strings.NewReader(input), func(s rdflibgo.Subject, p rdflibgo.URIRef, o rdflibgo.Term, graph rdflibgo.Term) error {
+		count++
+		if count == 2 {
+			return sentinel
+		}
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected handler error to propagate, got nil")
+	}
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected sentinel error, got: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected handler called exactly 2 times before abort, got %d", count)
+	}
+}
+
+// TestNQParseStreamNilHandler verifies that ParseStream rejects a nil handler
+// rather than panicking.
+func TestNQParseStreamNilHandler(t *testing.T) {
+	err := ParseStream(strings.NewReader(`<http://s> <http://p> "o" .`), nil)
+	if err == nil {
+		t.Fatal("expected error for nil handler, got nil")
+	}
+	if !strings.Contains(err.Error(), "nil") {
+		t.Errorf("expected error mentioning nil, got: %v", err)
+	}
+}
+
+// TestNQParseStreamWithMaxLineLength verifies that ParseStream honors the same
+// WithMaxLineLength option as Parse — the streaming path is the primary
+// motivator for large-line inputs (WKT polygons in gz dumps).
+func TestNQParseStreamWithMaxLineLength(t *testing.T) {
+	bigLiteral := strings.Repeat("x", 100*1024)
+	line := `<http://example.org/s> <http://example.org/p> "` + bigLiteral + `" <http://example.org/g> .` + "\n"
+
+	count := 0
+	err := ParseStream(strings.NewReader(line), func(s rdflibgo.Subject, p rdflibgo.URIRef, o rdflibgo.Term, graph rdflibgo.Term) error {
+		count++
+		return nil
+	}, WithMaxLineLength(1<<20))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 quad, got %d", count)
+	}
+}
+
+// TestNQParseStreamBNodeIdentity verifies that bnode labels stay stable across
+// lines — same `_:b1` on different lines yields the same BNode value. This is
+// load-bearing for streaming consumers that need to correlate triples sharing
+// a bnode subject without materializing a graph.
+func TestNQParseStreamBNodeIdentity(t *testing.T) {
+	input := `_:b1 <http://example.org/p> "a" .
+_:b1 <http://example.org/q> "b" .
+_:b2 <http://example.org/p> "c" .
+`
+	var subjects []string
+	err := ParseStream(strings.NewReader(input), func(s rdflibgo.Subject, p rdflibgo.URIRef, o rdflibgo.Term, graph rdflibgo.Term) error {
+		subjects = append(subjects, s.N3())
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"_:b1", "_:b1", "_:b2"}
+	if len(subjects) != len(want) {
+		t.Fatalf("expected %d subjects, got %d", len(want), len(subjects))
+	}
+	for i := range want {
+		if subjects[i] != want[i] {
+			t.Errorf("subject %d: want %q, got %q", i, want[i], subjects[i])
+		}
+	}
+}
+
+// TestNQParseStreamSkipsCommentsAndBlanks verifies the scanner loop honors
+// comment and blank-line rules in streaming mode.
+func TestNQParseStreamSkipsCommentsAndBlanks(t *testing.T) {
+	input := `# a comment
+
+<http://example.org/s> <http://example.org/p> "a" .
+   # indented comment
+
+<http://example.org/s> <http://example.org/p> "b" .
+`
+	count := 0
+	err := ParseStream(strings.NewReader(input), func(s rdflibgo.Subject, p rdflibgo.URIRef, o rdflibgo.Term, graph rdflibgo.Term) error {
+		count++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 quads, got %d", count)
 	}
 }

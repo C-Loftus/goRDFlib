@@ -2,6 +2,7 @@ package nt
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -493,5 +494,118 @@ func TestNTParserWithMaxLineLength(t *testing.T) {
 	}
 	if g.Len() != 1 {
 		t.Fatalf("expected 1 triple, got %d", g.Len())
+	}
+}
+
+// TestNTParseStreamBasic verifies that ParseStream dispatches every triple to
+// the handler with the correct subject, predicate, and object — and does not
+// require (nor populate) a graph.
+func TestNTParseStreamBasic(t *testing.T) {
+	input := `<http://example.org/s1> <http://example.org/p> "a" .
+<http://example.org/s2> <http://example.org/p> "b" .
+`
+	type row struct {
+		s, p, o string
+	}
+	var got []row
+	err := ParseStream(strings.NewReader(input), func(s rdflibgo.Subject, p rdflibgo.URIRef, o rdflibgo.Term) error {
+		got = append(got, row{s: s.N3(), p: p.N3(), o: o.N3()})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []row{
+		{s: "<http://example.org/s1>", p: "<http://example.org/p>", o: `"a"`},
+		{s: "<http://example.org/s2>", p: "<http://example.org/p>", o: `"b"`},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d triples, got %d (%v)", len(want), len(got), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("triple %d: want %+v, got %+v", i, want[i], got[i])
+		}
+	}
+}
+
+// TestNTParseStreamHandlerError verifies that an error returned from the handler
+// aborts parsing and propagates back to the caller.
+func TestNTParseStreamHandlerError(t *testing.T) {
+	input := `<http://example.org/s1> <http://example.org/p> "a" .
+<http://example.org/s2> <http://example.org/p> "b" .
+<http://example.org/s3> <http://example.org/p> "c" .
+`
+	sentinel := fmt.Errorf("sentinel")
+	count := 0
+	err := ParseStream(strings.NewReader(input), func(s rdflibgo.Subject, p rdflibgo.URIRef, o rdflibgo.Term) error {
+		count++
+		if count == 2 {
+			return sentinel
+		}
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected handler error to propagate, got nil")
+	}
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected sentinel error, got: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected handler called exactly 2 times before abort, got %d", count)
+	}
+}
+
+// TestNTParseStreamNilHandler verifies that ParseStream rejects a nil handler
+// rather than panicking.
+func TestNTParseStreamNilHandler(t *testing.T) {
+	err := ParseStream(strings.NewReader(`<http://s> <http://p> "o" .`), nil)
+	if err == nil {
+		t.Fatal("expected error for nil handler, got nil")
+	}
+	if !strings.Contains(err.Error(), "nil") {
+		t.Errorf("expected error mentioning nil, got: %v", err)
+	}
+}
+
+// TestNTParseStreamWithMaxLineLength verifies that ParseStream honors the same
+// WithMaxLineLength option as Parse.
+func TestNTParseStreamWithMaxLineLength(t *testing.T) {
+	bigLiteral := strings.Repeat("x", 100*1024)
+	line := `<http://example.org/s> <http://example.org/p> "` + bigLiteral + `" .` + "\n"
+
+	count := 0
+	err := ParseStream(strings.NewReader(line), func(s rdflibgo.Subject, p rdflibgo.URIRef, o rdflibgo.Term) error {
+		count++
+		return nil
+	}, WithMaxLineLength(1<<20))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 triple, got %d", count)
+	}
+}
+
+// TestNTParseStreamSkipsCommentsAndBlanks verifies the scanner loop honors
+// comment and blank-line rules in streaming mode.
+func TestNTParseStreamSkipsCommentsAndBlanks(t *testing.T) {
+	input := `# a comment
+
+<http://example.org/s> <http://example.org/p> "a" .
+   # indented comment
+
+<http://example.org/s> <http://example.org/p> "b" .
+`
+	count := 0
+	err := ParseStream(strings.NewReader(input), func(s rdflibgo.Subject, p rdflibgo.URIRef, o rdflibgo.Term) error {
+		count++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 triples, got %d", count)
 	}
 }
