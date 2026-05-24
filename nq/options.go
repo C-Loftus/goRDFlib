@@ -15,6 +15,7 @@ type config struct {
 	quadHandler  QuadHandler
 	errorHandler ErrorHandler
 	maxLineLen   int
+	unbounded    bool
 }
 
 // WithBase sets the base IRI for resolving relative IRIs.
@@ -38,6 +39,23 @@ func WithErrorHandler(h ErrorHandler) Option {
 // The default (bufio.MaxScanTokenSize, 64KB) is too small for inputs that pack
 // large literals — e.g. WKT polygons — onto one line. Pass a value larger than
 // the longest expected line in bytes.
+//
+// Use this when you can bound the longest line; it keeps a fixed memory ceiling.
+// When you cannot bound it, prefer WithUnboundedLines.
 func WithMaxLineLength(n int) Option {
 	return func(c *config) { c.maxLineLen = n }
+}
+
+// WithUnboundedLines parses lines of arbitrary length, growing the read buffer
+// as needed instead of enforcing a fixed maximum. Use this when the longest line
+// cannot be bounded ahead of time — e.g. N-Quads dumps mixing tiny literals with
+// multi-megabyte WKT geometries — so neither the 64KB default nor a guessed
+// WithMaxLineLength value fits.
+//
+// The trade-off is memory: the buffer may grow to hold the single longest line,
+// and a malformed input with no newlines can force the whole stream into memory.
+// When the maximum line size is known, WithMaxLineLength is the safer, bounded
+// choice. WithUnboundedLines takes precedence over WithMaxLineLength if both are set.
+func WithUnboundedLines() Option {
+	return func(c *config) { c.unbounded = true }
 }

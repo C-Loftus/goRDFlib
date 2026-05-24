@@ -1,7 +1,6 @@
 package nq
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"strings"
@@ -50,14 +49,18 @@ func parseLines(r io.Reader, opts []Option, h StreamHandler, dispatchQuadHandler
 	for _, o := range opts {
 		o(&cfg)
 	}
-	scanner := bufio.NewScanner(r)
-	if cfg.maxLineLen > 0 {
-		scanner.Buffer(make([]byte, 0, 64*1024), cfg.maxLineLen)
-	}
+	nextLine := ntsyntax.NewLineReader(r, cfg.maxLineLen, cfg.unbounded)
 	lineNum := 0
-	for scanner.Scan() {
+	for {
+		raw, err := nextLine()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
 		lineNum++
-		line := strings.TrimSpace(scanner.Text())
+		line := strings.TrimSpace(raw)
 		if line == "" || line[0] == '#' {
 			continue
 		}
@@ -73,7 +76,7 @@ func parseLines(r io.Reader, opts []Option, h StreamHandler, dispatchQuadHandler
 			}
 		}
 	}
-	return scanner.Err()
+	return nil
 }
 
 func parseNQLine(line string, lineNum int, h StreamHandler, qh QuadHandler, dispatchQuadHandler bool) error {

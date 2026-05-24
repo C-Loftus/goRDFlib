@@ -497,6 +497,92 @@ func TestNTParserWithMaxLineLength(t *testing.T) {
 	}
 }
 
+// TestNTParserWithUnboundedLines verifies that WithUnboundedLines parses a line
+// far larger than the 64KB scanner default without the caller having to know or
+// set an upper bound via WithMaxLineLength.
+func TestNTParserWithUnboundedLines(t *testing.T) {
+	bigLiteral := strings.Repeat("x", 5*1024*1024) // 5MB, well past any fixed buffer
+	line := `<http://example.org/s> <http://example.org/p> "` + bigLiteral + `" .` + "\n"
+
+	g := rdflibgo.NewGraph()
+	if err := Parse(g, strings.NewReader(line), WithUnboundedLines()); err != nil {
+		t.Fatalf("unexpected error with WithUnboundedLines: %v", err)
+	}
+	if g.Len() != 1 {
+		t.Fatalf("expected 1 triple, got %d", g.Len())
+	}
+}
+
+// TestNTParserUnboundedLinesMultiple verifies the unbounded reader still splits
+// on newlines correctly across many lines, including a final line without a
+// trailing newline.
+func TestNTParserUnboundedLinesMultiple(t *testing.T) {
+	input := `<http://example.org/s1> <http://example.org/p> "a" .
+# comment
+<http://example.org/s2> <http://example.org/p> "b" .
+
+<http://example.org/s3> <http://example.org/p> "c" .` // no trailing newline
+
+	g := rdflibgo.NewGraph()
+	if err := Parse(g, strings.NewReader(input), WithUnboundedLines()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if g.Len() != 3 {
+		t.Fatalf("expected 3 triples, got %d", g.Len())
+	}
+}
+
+// TestNTParseStreamWithUnboundedLines verifies ParseStream honors the option too.
+func TestNTParseStreamWithUnboundedLines(t *testing.T) {
+	bigLiteral := strings.Repeat("y", 2*1024*1024)
+	line := `<http://example.org/s> <http://example.org/p> "` + bigLiteral + `" .` + "\n"
+
+	count := 0
+	err := ParseStream(strings.NewReader(line), func(s rdflibgo.Subject, p rdflibgo.URIRef, o rdflibgo.Term) error {
+		count++
+		return nil
+	}, WithUnboundedLines())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 triple dispatched, got %d", count)
+	}
+}
+
+// BenchmarkNTParseScanner and BenchmarkNTParseUnbounded compare the two line
+// sources on identical input to confirm the default scanner path is not
+// regressed by adding the unbounded option.
+func benchNTInput() string {
+	var b strings.Builder
+	for i := 0; i < 1000; i++ {
+		fmt.Fprintf(&b, "<http://example.org/s%d> <http://example.org/p> \"value number %d here\" .\n", i, i)
+	}
+	return b.String()
+}
+
+func BenchmarkNTParseScanner(b *testing.B) {
+	input := benchNTInput()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		g := rdflibgo.NewGraph()
+		if err := Parse(g, strings.NewReader(input)); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkNTParseUnbounded(b *testing.B) {
+	input := benchNTInput()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		g := rdflibgo.NewGraph()
+		if err := Parse(g, strings.NewReader(input), WithUnboundedLines()); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // TestNTParseStreamBasic verifies that ParseStream dispatches every triple to
 // the handler with the correct subject, predicate, and object — and does not
 // require (nor populate) a graph.

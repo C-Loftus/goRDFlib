@@ -445,6 +445,89 @@ func TestNQParseStreamWithMaxLineLength(t *testing.T) {
 	}
 }
 
+// TestNQParserWithUnboundedLines verifies that WithUnboundedLines parses a quad
+// whose literal far exceeds the 64KB scanner default, without the caller having
+// to set WithMaxLineLength to a guessed upper bound.
+func TestNQParserWithUnboundedLines(t *testing.T) {
+	bigLiteral := strings.Repeat("x", 5*1024*1024) // 5MB
+	line := `<http://example.org/s> <http://example.org/p> "` + bigLiteral + `" <http://example.org/g> .` + "\n"
+
+	g := rdflibgo.NewGraph()
+	if err := Parse(g, strings.NewReader(line), WithUnboundedLines()); err != nil {
+		t.Fatalf("unexpected error with WithUnboundedLines: %v", err)
+	}
+	if g.Len() != 1 {
+		t.Fatalf("expected 1 triple, got %d", g.Len())
+	}
+}
+
+// TestNQParserUnboundedLinesMultiple verifies the unbounded reader splits on
+// newlines correctly across many lines, including a final line with no trailing
+// newline.
+func TestNQParserUnboundedLinesMultiple(t *testing.T) {
+	input := `<http://example.org/s1> <http://example.org/p> "a" <http://example.org/g> .
+# comment
+<http://example.org/s2> <http://example.org/p> "b" .
+
+<http://example.org/s3> <http://example.org/p> "c" <http://example.org/g> .` // no trailing newline
+
+	g := rdflibgo.NewGraph()
+	if err := Parse(g, strings.NewReader(input), WithUnboundedLines()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if g.Len() != 3 {
+		t.Fatalf("expected 3 triples, got %d", g.Len())
+	}
+}
+
+// TestNQParseStreamWithUnboundedLines verifies ParseStream honors the option.
+func TestNQParseStreamWithUnboundedLines(t *testing.T) {
+	bigLiteral := strings.Repeat("y", 2*1024*1024)
+	line := `<http://example.org/s> <http://example.org/p> "` + bigLiteral + `" <http://example.org/g> .` + "\n"
+
+	count := 0
+	err := ParseStream(strings.NewReader(line), func(s rdflibgo.Subject, p rdflibgo.URIRef, o rdflibgo.Term, graph rdflibgo.Term) error {
+		count++
+		return nil
+	}, WithUnboundedLines())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 quad dispatched, got %d", count)
+	}
+}
+
+func benchNQInput() string {
+	var b strings.Builder
+	for i := 0; i < 1000; i++ {
+		fmt.Fprintf(&b, "<http://example.org/s%d> <http://example.org/p> \"value number %d\" <http://example.org/g> .\n", i, i)
+	}
+	return b.String()
+}
+
+func BenchmarkNQParseScanner(b *testing.B) {
+	input := benchNQInput()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		g := rdflibgo.NewGraph()
+		if err := Parse(g, strings.NewReader(input)); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkNQParseUnbounded(b *testing.B) {
+	input := benchNQInput()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		g := rdflibgo.NewGraph()
+		if err := Parse(g, strings.NewReader(input), WithUnboundedLines()); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // TestNQParseStreamBNodeIdentity verifies that bnode labels stay stable across
 // lines — same `_:b1` on different lines yields the same BNode value. This is
 // load-bearing for streaming consumers that need to correlate triples sharing
