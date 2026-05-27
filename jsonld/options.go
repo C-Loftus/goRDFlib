@@ -16,6 +16,7 @@ type config struct {
 	base           string
 	form           OutputForm
 	documentLoader ld.DocumentLoader
+	skipInvalidIRI bool
 }
 
 // Option configures JSON-LD parsing or serialization.
@@ -39,4 +40,17 @@ func WithExpanded() Option {
 // WithDocumentLoader sets a custom document loader for remote context resolution.
 func WithDocumentLoader(loader ld.DocumentLoader) Option {
 	return func(c *config) { c.documentLoader = loader }
+}
+
+// WithSkipInvalidIRIs makes parsing tolerant of syntactically invalid IRIs (e.g.
+// a stray space, as in "schema: Dataset") that the JSON-LD expander emits into
+// the intermediate N-Quads instead of dropping. The offending triple is silently
+// skipped and parsing continues, rather than failing the whole document.
+//
+// This matches Python rdflib/pySHACL, which drop such triples before validation.
+// The default (option unset) is strict: an invalid IRI is a hard error. Note that
+// the bundled JSON-LD processor already drops most malformed IRIs on its own; this
+// option is a safety net for IRIs that slip through to the N-Quads layer.
+func WithSkipInvalidIRIs() Option {
+	return func(c *config) { c.skipInvalidIRI = true }
 }

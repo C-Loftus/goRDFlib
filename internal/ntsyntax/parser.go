@@ -2,6 +2,7 @@
 package ntsyntax
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -9,6 +10,12 @@ import (
 
 	rdflibgo "github.com/tggo/goRDFlib"
 )
+
+// ErrInvalidIRI marks a line that failed to parse because an IRI contained a
+// syntactically invalid character (e.g. a raw space). Callers can match it with
+// errors.Is to selectively skip such lines — useful when consuming IRIs produced
+// by a lenient upstream (e.g. a JSON-LD expander) without aborting the parse.
+var ErrInvalidIRI = errors.New("invalid character in IRI")
 
 // LineParser holds state for parsing a single N-Triples/N-Quads line.
 type LineParser struct {
@@ -205,7 +212,7 @@ func (p *LineParser) ReadIRI() (string, error) {
 		}
 		// Reject invalid IRI characters.
 		if ch <= 0x20 {
-			return "", fmt.Errorf("line %d: invalid character in IRI", p.LineNum)
+			return "", fmt.Errorf("line %d: %w", p.LineNum, ErrInvalidIRI)
 		}
 		p.Pos++
 	}

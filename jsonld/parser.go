@@ -2,11 +2,13 @@ package jsonld
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 
 	rdflibgo "github.com/tggo/goRDFlib"
+	"github.com/tggo/goRDFlib/internal/ntsyntax"
 	"github.com/tggo/goRDFlib/nq"
 
 	"github.com/piprate/json-gold/ld"
@@ -53,5 +55,23 @@ func Parse(g *rdflibgo.Graph, r io.Reader, opts ...Option) error {
 	}
 
 	// Parse the N-Quads into the graph
-	return nq.Parse(g, strings.NewReader(nqStr))
+	return parseNQuadsInto(g, nqStr, &cfg)
+}
+
+// parseNQuadsInto parses the expanded N-Quads into g, honoring cfg.skipInvalidIRI.
+// When set, lines that fail because of an invalid IRI (ntsyntax.ErrInvalidIRI)
+// are skipped instead of aborting the parse.
+func parseNQuadsInto(g *rdflibgo.Graph, nqStr string, cfg *config) error {
+	if !cfg.skipInvalidIRI {
+		return nq.Parse(g, strings.NewReader(nqStr))
+	}
+	skipInvalid := func(lineNum int, line string, err error) (string, bool) {
+		if errors.Is(err, ntsyntax.ErrInvalidIRI) {
+			return "", false // skip this triple, continue parsing
+		}
+		// Re-surface anything that isn't an invalid IRI by re-parsing the
+		// unmodified line, which fails the same way and aborts.
+		return line, true
+	}
+	return nq.Parse(g, strings.NewReader(nqStr), nq.WithErrorHandler(skipInvalid))
 }

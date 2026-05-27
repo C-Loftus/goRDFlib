@@ -251,3 +251,55 @@ func TestJSONLDAnyTypeAlias(t *testing.T) {
 	var v any = "test"
 	_ = v
 }
+
+// --- Issue #13: lenient handling of invalid IRIs leaking into the N-Quads layer ---
+
+// badNQuads has one syntactically invalid IRI (raw space in the object IRI) and
+// one well-formed triple. json-gold normally drops/encodes such IRIs before this
+// layer, but older or differently-configured expanders can let them through; this
+// exercises that path directly.
+const badNQuads = `<http://example.org/s> <http://example.org/p> <http://example.org/good> .
+<http://example.org/s> <http://example.org/p> <http://example.org/bad iri> .
+`
+
+// TestJSONLDStrictRejectsInvalidIRI documents the default: an invalid IRI that
+// reaches the N-Quads parser is a hard error.
+func TestJSONLDStrictRejectsInvalidIRI(t *testing.T) {
+	g := rdflibgo.NewGraph()
+	var cfg config
+	err := parseNQuadsInto(g, badNQuads, &cfg)
+	if err == nil {
+		t.Fatal("expected error parsing invalid IRI in strict (default) mode, got nil")
+	}
+}
+
+// TestJSONLDSkipInvalidIRIs verifies WithSkipInvalidIRIs drops the malformed
+// triple and keeps the well-formed one — matching pyshacl's lenient behavior.
+func TestJSONLDSkipInvalidIRIs(t *testing.T) {
+	g := rdflibgo.NewGraph()
+	var cfg config
+	WithSkipInvalidIRIs()(&cfg)
+	if err := parseNQuadsInto(g, badNQuads, &cfg); err != nil {
+		t.Fatalf("unexpected error with WithSkipInvalidIRIs: %v", err)
+	}
+	if g.Len() != 1 {
+		t.Fatalf("expected 1 triple (bad one skipped), got %d", g.Len())
+	}
+	s, _ := rdflibgo.NewURIRef("http://example.org/s")
+	p, _ := rdflibgo.NewURIRef("http://example.org/p")
+	good, _ := rdflibgo.NewURIRef("http://example.org/good")
+	if !g.Contains(s, p, good) {
+		t.Error("expected the well-formed triple to survive")
+	}
+}
+
+// TestJSONLDSkipInvalidIRIsEndToEnd runs the author's exact example through the
+// public Parse with the option set: it must succeed (it already does on current
+// json-gold, which drops the malformed term itself).
+func TestJSONLDSkipInvalidIRIsEndToEnd(t *testing.T) {
+	doc := `{"@context":[{"schema":"https://schema.org/"}],"@type":["schema:Place","schema: Dataset"]}`
+	g := rdflibgo.NewGraph()
+	if err := Parse(g, strings.NewReader(doc), WithSkipInvalidIRIs()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
